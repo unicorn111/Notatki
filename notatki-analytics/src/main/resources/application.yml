@@ -1,0 +1,17 @@
+server:
+  port: 8099
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5456/analytics_db # Environment variable
+    username: postgres # Environment variable
+    password: postgres # Environment variable
+    driver-class-name: org.postgresql.Driver
+    type: com.zaxxer.hikari.HikariDataSource
+  flyway:
+    lockRetryCount: -1
+    baseline-on-migrate: true
+  rabbitmq:
+    addresses: localhost:5672
+    username: myuser
+    password: mypassword
+
