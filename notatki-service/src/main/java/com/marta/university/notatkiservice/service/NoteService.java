@@ -77,6 +77,10 @@ public class NoteService {
         return noteRepository.findAllByUserId(userId).stream().map(this::mapNoteDto).toList();
     }
 
+    public List<Integer> getAllNoteIdByUserId(int userId){
+        return getAllByUserId(userId).stream().map(i -> i.getNoteId()).toList();
+    }
+
     public List<NoteDto> getAllNotes(){
         Iterable<Note> notes = noteRepository.findAll();
         Spliterator<Note> spliterator = notes.spliterator();

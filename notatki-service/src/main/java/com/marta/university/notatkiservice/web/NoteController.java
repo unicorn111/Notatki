@@ -38,6 +38,10 @@ public class NoteController {
     public ResponseEntity<List<NoteDto>> getNotesByUser(@PathVariable("userId") int userId){
         return ResponseEntity.ok(noteService.getAllByUserId(userId));
     }
+    @GetMapping("/notes-ids/{userId}")
+    public ResponseEntity<List<Integer>> getNoteIdByUser(@PathVariable("userId") int userId){
+        return ResponseEntity.ok(noteService.getAllNoteIdByUserId(userId));
+    }
     @GetMapping("/notes")
     public ResponseEntity<?> getAllNotes(){
         return ResponseEntity.ok(noteService.getAllNotes());
