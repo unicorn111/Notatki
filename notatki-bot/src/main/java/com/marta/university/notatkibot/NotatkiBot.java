@@ -2,20 +2,21 @@ package com.marta.university.notatkibot;
 
 import com.marta.university.notatkibot.dto.AnalyticsDto;
 import com.marta.university.notatkibot.dto.NoteDto;
+import lombok.Data;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
+import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
 @Component
 public class NotatkiBot extends TelegramLongPollingBot {
@@ -23,9 +24,15 @@ public class NotatkiBot extends TelegramLongPollingBot {
     private String username;
     @Value("${telegram.bot.token}")
     private String token;
-    private static boolean toDelete = false;
-    private WebClient notatkiService = WebClient.create("http://localhost:8098");
-    private WebClient analyticsService = WebClient.create("http://localhost:8099");
+    private String authorizedUser;
+    private Map<String, NoteToUpdate> updateNote = new HashMap<>();
+    private final WebClient notatkiService = WebClient.create("http://localhost:8098");
+    private final WebClient analyticsService = WebClient.create("http://localhost:8099");
+
+    @Data
+    private class NoteToUpdate{
+        private String noteId;
+    }
 
     @Override
     public String getBotUsername() {
@@ -39,23 +46,34 @@ public class NotatkiBot extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update update) {
-        if (update.hasMessage() && update.getMessage().hasText()) {
+        if (update.hasCallbackQuery()) {
+            handleCallback(update.getCallbackQuery());
+        } else if (update.hasMessage() && update.getMessage().hasText()) {
+            handleMessage(update.getMessage());
+        }
+    }
+
+    private void handleMessage(Message message) {
             SendMessage sendMessage = new SendMessage();
-            sendMessage.setChatId(update.getMessage().getChatId().toString());
-            switch (update.getMessage().getText()){
+            sendMessage.setChatId(message.getChatId().toString());
+            authorizedUser = message.getChatId().toString();
+            List<Integer> ids;
+            switch (message.getText()){
                 case("/start"):
                     sendMessage.setText("Hi! Just write down your notes or use /help to see additional options");
                     break;
                 case("/getNotes"):
                     List<NoteDto> notes = notatkiService.get()
-                            .uri("/notes-user/" + update.getMessage().getChatId())
+                            .uri("/notes-user/" + authorizedUser)
                             .retrieve()
                             .bodyToMono(List.class)
                             .block();
+                    //notes.stream().map(n -> n.getNoteId() + " " + n.getNote()).collect(Collectors.joining(" "));
                     sendMessage.setText(notes.toString());
                     break;
                 case("/getAnalytics"):
-                    AnalyticsDto analytics = analyticsService.get().uri("/analytics/"+ update.getMessage().getChatId())
+                    AnalyticsDto analytics = analyticsService.get()
+                            .uri("/analytics/"+ authorizedUser)
                             .retrieve()
                             .bodyToMono(AnalyticsDto.class)
                             .block();
@@ -68,12 +86,14 @@ public class NotatkiBot extends TelegramLongPollingBot {
                 case("/help"):
                     sendMessage.setText("/start - greetings\n" +
                             "/getNotes - get all notes\n" +
-                            "/getAnalytics - get user analytics\n"+
-                            "/delete - delete a note by noteId");
+                            "/getAnalytics - get user analytics\n" +
+                            "/delete - delete a note by noteId\n" +
+                            "/getNote - get one note\n" +
+                            "/update - update a note");
                     break;
                 case("/delete"):
-                    List<Integer> ids = notatkiService.get()
-                            .uri("/notes-ids/" + update.getMessage().getChatId())
+                    ids = notatkiService.get()
+                            .uri("/notes-ids/" + authorizedUser)
                             .retrieve()
                             .bodyToMono(List.class)
                             .block();
@@ -82,33 +102,60 @@ public class NotatkiBot extends TelegramLongPollingBot {
                         break;
                     }
                     sendMessage.setText("Please, choose a Note Id:");
-                    sendMessage.setReplyMarkup(createKeyboard(ids));
-                    toDelete = true;
+                    sendMessage.setReplyMarkup(createKeyboard(ids, "DELETE"));
                     break;
-                default:
-                    if(toDelete){
-                        notatkiService.delete()
-                                .uri("/notes/" + update.getMessage().getText())
-                                .retrieve()
-                                .bodyToMono(Void.class)
-                                .block();
-                        toDelete = false;
-                        sendMessage.setText("Your note has been successfully deleted");
+                case("/update"):
+                    ids = notatkiService.get()
+                            .uri("/notes-ids/" + authorizedUser)
+                            .retrieve()
+                            .bodyToMono(List.class)
+                            .block();
+                    if(ids.size() == 0){
+                        sendMessage.setText("Sorry, no notes to update");
                         break;
                     }
-                    else {
+                    sendMessage.setText("Please, choose a Note Id:");
+                    sendMessage.setReplyMarkup(createKeyboard(ids, "UPDATE"));
+                    break;
+                case("/getNote"):
+                    ids = notatkiService.get()
+                            .uri("/notes-ids/" + authorizedUser)
+                            .retrieve()
+                            .bodyToMono(List.class)
+                            .block();
+                    if(ids.size() == 0){
+                        sendMessage.setText("Sorry, no notes");
+                        break;
+                    }
+                    sendMessage.setText("Please, choose a Note Id:");
+                    sendMessage.setReplyMarkup(createKeyboard(ids, "GET"));
+                    break;
+                default:
+                    if(updateNote.containsKey(authorizedUser)){
                         NoteDto note = new NoteDto();
-                        note.setNote(update.getMessage().getText());
-                        note.setUserId(update.getMessage().getChatId().toString());
-                        notatkiService.post()
+                        note.setNote(message.getText());
+                        note.setNoteId(Integer.valueOf(updateNote.get(authorizedUser).getNoteId()));
+                        notatkiService.put()
                                 .uri("/notes")
                                 .contentType(MediaType.APPLICATION_JSON).bodyValue(note)
                                 .retrieve()
                                 .bodyToMono(Void.class)
                                 .block();
-                        sendMessage.setText("Your note has been successfully saved");
+                        updateNote.remove(authorizedUser);
+                        sendMessage.setText("Your note has been successfully updated");
                         break;
                     }
+                    NoteDto note = new NoteDto();
+                    note.setNote(message.getText());
+                    note.setUserId(authorizedUser);
+                    notatkiService.post()
+                                .uri("/notes")
+                                .contentType(MediaType.APPLICATION_JSON).bodyValue(note)
+                                .retrieve()
+                                .bodyToMono(Void.class)
+                                .block();
+                    sendMessage.setText("Your note has been successfully saved");
+                    break;
             }
             try {
                 execute(sendMessage);
@@ -116,22 +163,64 @@ public class NotatkiBot extends TelegramLongPollingBot {
                 throw new RuntimeException(e);
             }
         }
+
+    private void handleCallback(CallbackQuery callbackQuery) {
+        Message message = callbackQuery.getMessage();
+        SendMessage sendMessage = new SendMessage();
+        sendMessage.setChatId(message.getChatId().toString());
+        String[] param = callbackQuery.getData().split(" ");
+        String action = param[0];
+        String noteId = param[1];
+        switch (action) {
+            case "DELETE":
+                notatkiService.delete()
+                        .uri("/notes/" + noteId)
+                        .retrieve()
+                        .bodyToMono(Void.class)
+                        .block();
+                sendMessage.setText("Your note has been successfully deleted");
+                break;
+            case "UPDATE":
+                NoteToUpdate noteToUpdate = new NoteToUpdate();
+                noteToUpdate.setNoteId(noteId);
+                updateNote.put(authorizedUser, noteToUpdate);
+                sendMessage.setText("Your old note: " + notatkiService.get()
+                        .uri("/notes/" + updateNote.get(authorizedUser).getNoteId())
+                        .retrieve()
+                        .bodyToMono(NoteDto.class)
+                        .block().getNote() + ". Please, enter new text: ");
+                break;
+            case "GET":
+                sendMessage.setText(notatkiService.get()
+                        .uri("/notes/" + noteId)
+                        .retrieve()
+                        .bodyToMono(NoteDto.class)
+                        .block().getNote());
+        }
+        try {
+            execute(sendMessage);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(e);
+        }
     }
-    private ReplyKeyboardMarkup createKeyboard(List<Integer> ids){
-        List<KeyboardRow> rows = new ArrayList<>(Arrays.asList(new KeyboardRow()));
+
+    private InlineKeyboardMarkup createKeyboard(List<Integer> ids, String action){
+        InlineKeyboardMarkup inlineKeyboardMarkup =new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rowList= new ArrayList<>(Arrays.asList(new ArrayList<InlineKeyboardButton>()));
+
         if (ids.size()>10){
             for(int i=1; i<=(ids.size()/10); i++){
-                rows.add(new KeyboardRow());
+                rowList.add(new ArrayList<InlineKeyboardButton>());
             }
         }
         for(int i=0; i<ids.size(); i++){
-            rows.get(i/10).add(ids.get(i).toString());
+            InlineKeyboardButton inlineKeyboardButton = new InlineKeyboardButton();
+            inlineKeyboardButton.setText(ids.get(i).toString());
+            inlineKeyboardButton.setCallbackData(action + " " + ids.get(i).toString());
+            rowList.get(i/10).add(inlineKeyboardButton);
         }
-        return ReplyKeyboardMarkup.builder()
-                .keyboard(rows)
-                .selective(true)
-                .resizeKeyboard(true)
-                .oneTimeKeyboard(true)
-                .build();
+        inlineKeyboardMarkup.setKeyboard(rowList);
+        return inlineKeyboardMarkup;
     }
 }
+
